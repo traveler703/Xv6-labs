@@ -101,6 +101,7 @@ sys_trace(void) {
     int mask;
     if (argint(0, &mask) < 0)
         return -1;
-    myproc()->trace_mask = mask;
+    struct proc *p = myproc();
+    p->trace_mask = mask;
     return 0;
 }

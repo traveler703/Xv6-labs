@@ -166,7 +166,6 @@ syscall(void)
   num = p->trapframe->a7;
   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
     p->trapframe->a0 = syscalls[num]();
-    p->trapframe->a0 = syscalls[num]();
      if (p->trace_mask & (1 << num)) {
             printf("%d: syscall %s -> %d\n", 
             p->pid, syscallnames[num], p->trapframe->a0);
