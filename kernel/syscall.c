@@ -136,11 +136,12 @@ static uint64 (*syscalls[])(void) = {
 #ifdef LAB_NET
 [SYS_connect] sys_connect,
 #endif
-
 #ifdef LAB_PGTBL
 [SYS_pgaccess] sys_pgaccess,
 #endif
 };
+
+
 
 void
 syscall(void)

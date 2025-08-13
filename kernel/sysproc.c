@@ -6,7 +6,6 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
-#include "sysinfo.h"
 
 uint64
 sys_exit(void)
@@ -82,7 +81,6 @@ int
 sys_pgaccess(void)
 {
   // lab pgtbl: your code here.
-
   uint64 start_va;
   int num_pages;
   uint64 user_mask;
@@ -110,7 +108,6 @@ sys_pgaccess(void)
   // 将内核缓冲区内容拷贝到用户空间
   if (copyout(pagetable, user_mask, (char *)&mask, sizeof(mask)) < 0)
     return -1;
-
 
   return 0;
 }
