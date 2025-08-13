@@ -6,6 +6,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sysinfo.h"
 
 uint64
 sys_exit(void)
@@ -46,7 +47,7 @@ sys_sbrk(void)
 
   if(argint(0, &n) < 0)
     return -1;
-
+  
   addr = myproc()->sz;
   if(growproc(n) < 0)
     return -1;
@@ -77,43 +78,40 @@ sys_sleep(void)
 
 
 #ifdef LAB_PGTBL
-extern pte_t *walk(pagetable_t, uint64, int);
 int
 sys_pgaccess(void)
 {
   // lab pgtbl: your code here.
-  uint64 srcva, st;
-  int len;
-  uint64 buf = 0;
-  struct proc *p = myproc();
 
-  acquire(&p->lock);
+  uint64 start_va;
+  int num_pages;
+  uint64 user_mask;
 
-  argaddr(0, &srcva);
-  argint(1, &len);
-  argaddr(2, &st);
-  if ((len > 64) || (len < 1))
-    return -1;
-  pte_t *pte;
-  for (int i = 0; i < len; i++)
-  {
-    pte = walk(p->pagetable, srcva + i * PGSIZE, 0);
-    if(pte == 0){
+  // 解析用户传入的参数
+  if (argaddr(0, &start_va) < 0)
       return -1;
-    }
-    if((*pte & PTE_V) == 0){
+  if (argint(1, &num_pages) < 0)
       return -1;
-    }
-    if((*pte & PTE_U) == 0){
+  if (argaddr(2, &user_mask) < 0)
       return -1;
-    }
-    if(*pte & PTE_A){
-      *pte = *pte & ~PTE_A;
-      buf |= (1 << i);
+
+  // 设置一个内核缓冲区来存储访问结果
+  uint64 mask = 0;
+  pagetable_t pagetable = myproc()->pagetable;
+
+  for (int i = 0; i < num_pages; i++) {
+    pte_t *pte = walk(pagetable, start_va + i * PGSIZE, 0);
+    if (pte && (*pte & PTE_V) && (*pte & PTE_A)) {
+      mask |= (1L << i);  // 设置对应位
+      *pte &= ~PTE_A;     // 清除访问位
     }
   }
-  release(&p->lock);
-  copyout(p->pagetable, st, (char *)&buf, ((len -1) / 8) + 1);
+
+  // 将内核缓冲区内容拷贝到用户空间
+  if (copyout(pagetable, user_mask, (char *)&mask, sizeof(mask)) < 0)
+    return -1;
+
+
   return 0;
 }
 #endif
