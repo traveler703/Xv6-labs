@@ -356,21 +356,23 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
     if(uncopied_cow(pagetable, va0)){
-      try(cowalloc(pagetable, va0), return -1);
-    }
-    pa0 = walkaddr(pagetable, va0);
-    if(pa0 == 0)
-      return -1;
-    n = PGSIZE - (dstva - va0);
-    if(n > len)
-      n = len;
-    memmove((void *)(pa0 + (dstva - va0)), src, n);
+      if(cow_alloc(pagetable, va0) != 0){
+        return -1;  // 分配cow页失败
+      }
+      pa0 = walkaddr(pagetable, va0);
+      if(pa0 == 0)
+        return -1;
+      n = PGSIZE - (dstva - va0);
+      if(n > len)
+        n = len;
+      memmove((void *)(pa0 + (dstva - va0)), src, n);
 
-    len -= n;
-    src += n;
-    dstva = va0 + PGSIZE;
-  }
+      len -= n;
+      src += n;
+      dstva = va0 + PGSIZE;
+    }
   return 0;
+  }
 }
 
 // Copy from user to kernel.
@@ -462,7 +464,7 @@ cow_alloc(pagetable_t pagetable, uint64 va)
     return -1;
   uint64 flags = PTE_FLAGS(*pte);
   uint64 pa = PTE2PA(*pte);  //cow页原来使用的父进程的页表
-  uint64 newpage = kalloc();     
+  uint64 newpage = (uint64)kalloc();     
   if(!newpage){
     return -1;
   }
@@ -473,8 +475,8 @@ cow_alloc(pagetable_t pagetable, uint64 va)
   uvmunmap(pagetable, va_rounded, 1, 1);  //解除虚拟页和物理页的映射关系
   if(mappages(pagetable, va_rounded, PGSIZE, newpage, flags) != 0){
     //建立新的虚拟页和物理页的映射关系
-    kfree(newpage);
+    kfree((void *)newpage);
     return -1;
   }
-    return 0;
+  return 0;
 }
