@@ -345,6 +345,19 @@ uvmclear(pagetable_t pagetable, uint64 va)
   *pte &= ~PTE_U;
 }
 
+int uncopied_cow(pagetable_t pgtbl, uint64 va){
+  if(va >= MAXVA) 
+    return 0;
+  pte_t* pte = walk(pgtbl, va, 0);
+  if(pte == 0)  //如果这个页不存在
+    return 0;
+  if((*pte & PTE_V) == 0)
+    return 0;
+  if((*pte & PTE_U) == 0)
+    return 0;
+  return ((*pte) & PTE_COW);  //有PTE_COW的代表还没复制过，并且是cow页
+}
+
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
@@ -440,19 +453,6 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
-}
-
-int uncopied_cow(pagetable_t pgtbl, uint64 va){
-  if(va >= MAXVA) 
-    return 0;
-  pte_t* pte = walk(pgtbl, va, 0);
-  if(pte == 0)  //如果这个页不存在
-    return 0;
-  if((*pte & PTE_V) == 0)
-    return 0;
-  if((*pte & PTE_U) == 0)
-    return 0;
-  return ((*pte) & PTE_COW);  //有PTE_COW的代表还没复制过，并且是cow页
 }
 
 int
