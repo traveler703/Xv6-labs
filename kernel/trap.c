@@ -15,6 +15,7 @@ extern char trampoline[], uservec[], userret[];
 void kernelvec();
 
 extern int devintr();
+extern int uncopied_cow(pagetable_t pgtbl, uint64 va);
 
 void
 trapinit(void)
