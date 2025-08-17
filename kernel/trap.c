@@ -67,6 +67,11 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if (r_scause() == 15 && uncopied_cow(p->pagetable, r_stval())) {
+    //scause为15代表尝试写入引发的缺页错误，且是合法的COW页
+    if(cow_alloc(p->pagetable, r_stval()) < 0){
+      p->killed = 1;
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());

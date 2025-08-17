@@ -303,7 +303,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  //char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -311,14 +311,19 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
+    *pte = *pte & ~PTE_W; // clear write bit, so child can't write to parent's memory
+    *pte = *pte | PTE_COW; // set copy-on-write bit
+    
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    //if((mem = kalloc()) == 0)
+      //goto err;
+    //memmove(mem, (char*)pa, PGSIZE);
+    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
+      //kfree(mem);
+      printf("uvmcopy: mappages\n");
       goto err;
     }
+    refcnt_inc((void *) pa);  // 增加引用计数
   }
   return 0;
 
@@ -350,6 +355,9 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
+    if(uncopied_cow(pagetable, va0)){
+      try(cowalloc(pagetable, va0), return -1);
+    }
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
@@ -431,4 +439,42 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int uncopied_cow(pagetable_t pgtbl, uint64 va){
+  if(va >= MAXVA) 
+    return 0;
+  pte_t* pte = walk(pgtbl, va, 0);
+  if(pte == 0)  //如果这个页不存在
+    return 0;
+  if((*pte & PTE_V) == 0)
+    return 0;
+  if((*pte & PTE_U) == 0)
+    return 0;
+  return ((*pte) & PTE_COW);  //有PTE_COW的代表还没复制过，并且是cow页
+}
+
+int
+cow_alloc(pagetable_t pagetable, uint64 va)
+{
+  pte_t *pte = walk(pagetable, va, 0);
+  if(pte == 0)
+    return -1;
+  uint64 flags = PTE_FLAGS(*pte);
+  uint64 pa = PTE2PA(*pte);  //cow页原来使用的父进程的页表
+  uint64 newpage = kalloc();     
+  if(!newpage){
+    return -1;
+  }
+  uint64 va_rounded = PGROUNDDOWN(va);  //当前页
+  flags &= ~PTE_COW;  //清除页表项中的COW位
+  flags |= PTE_W;  //设置页表项中的W位，可以对新页进行写操作
+  memmove((void *)newpage, (const void *) pa, PGSIZE);  //将原物理页中的内容复制到新物理页中
+  uvmunmap(pagetable, va_rounded, 1, 1);  //解除虚拟页和物理页的映射关系
+  if(mappages(pagetable, va_rounded, PGSIZE, newpage, flags) != 0){
+    //建立新的虚拟页和物理页的映射关系
+    kfree(newpage);
+    return -1;
+  }
+    return 0;
 }
