@@ -116,7 +116,7 @@ e1000_transmit(struct mbuf *m)
     tx_mbufs[idx] = NULL;
   }
 
-  desc->addr = m->head;
+  desc->addr = (uint64)m->head;
   desc->length = m->len;
 
   desc->cmd = E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
@@ -147,7 +147,7 @@ e1000_recv(void)
     rx_mbufs[idx]->len = desc->length;
     net_rx(rx_mbufs[idx]);
     rx_mbufs[idx] = mbufalloc(0);
-    desc->addr = rx_mbufs[idx]->head;
+    desc->addr = (uint64)rx_mbufs[idx]->head;
     desc->status = 0;
     regs[E1000_RDT] = idx;
   }
