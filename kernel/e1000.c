@@ -104,25 +104,27 @@ e1000_transmit(struct mbuf *m)
   // a pointer so that it can be freed after sending.
   //
   acquire(&e1000_lock);
-  uint32 idx = regs[E1000_TDT];
-  if (tx_ring[idx].status != E1000_TXD_STAT_DD)
-  {
-    printf("e1000_transmit: tx queue full\n");
+  uint idx = regs[E1000_TDT];
+  struct tx_desc *desc = &tx_ring[idx];
+  if(!(desc->status & E1000_TXD_STAT_DD)){
     release(&e1000_lock);
     return -1;
-  } else {
-    if (tx_mbufs[idx] != 0)
-    {
-      mbuffree(tx_mbufs[idx]);
-    }
-    tx_ring[idx].addr = (uint64) m->head;
-    tx_ring[idx].length = (uint16) m->len;
-    tx_ring[idx].cso = 0;
-    tx_ring[idx].css = 0;
-    tx_ring[idx].cmd = E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
-    tx_mbufs[idx] = m;
-    regs[E1000_TDT] = (regs[E1000_TDT] + 1) % TX_RING_SIZE;
   }
+
+  if(tx_mbufs[idx] != NULL){
+    mbuffree(tx_mbufs[idx]);
+    tx_mbufs[idx] = NULL;
+  }
+
+  desc->addr = m->head;
+  desc->length = m->len;
+
+  desc->cmd = E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
+  
+  tx_mbufs[idx] = m; 
+
+  regs[E1000_TDT] = (idx + 1) % TX_RING_SIZE;
+
   release(&e1000_lock);
   return 0;
 }
@@ -136,22 +138,18 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
-  uint32 idx = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
-  struct rx_desc* dest = &rx_ring[idx];
-  while (rx_ring[idx].status & E1000_RXD_STAT_DD)
-  {
-    acquire(&e1000_lock);
-    struct mbuf *buf = rx_mbufs[idx];
-    mbufput(buf, dest->length);
-    if (!(rx_mbufs[idx] = mbufalloc(0)))
-	    panic("mbuf alloc failed");
-    dest->addr = (uint64)rx_mbufs[idx]->head;
-    dest->status = 0;
+  while(1){
+    uint idx = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+    struct rx_desc *desc = &rx_ring[idx];
+    if(!(desc->status & E1000_RXD_STAT_DD)){
+      return;
+    } 
+    rx_mbufs[idx]->len = desc->length;
+    net_rx(rx_mbufs[idx]);
+    rx_mbufs[idx] = mbufalloc(0);
+    desc->addr = rx_mbufs[idx]->head;
+    desc->status = 0;
     regs[E1000_RDT] = idx;
-    release(&e1000_lock);
-    net_rx(buf);
-    idx = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
-    dest = &rx_ring[idx];
   }
 }
 
