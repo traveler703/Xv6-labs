@@ -28,8 +28,7 @@
 
 struct {
   struct spinlock bhash_lk[BUCK_SIZ]; // buf hash lock
-  struct spinlock evict_lk; // 持有这个锁之后会去检查应该去驱逐哪个块的缓存
-  struct buf bhash_head[BUCK_SIZ]; // 每个桶的开头，不用 buf* 是因为我们需要得到某个 buf 前面的 buf
+  struct buf bhash_head[BUCK_SIZ]; // 每个桶的开头，不用buf*是因为我们需要得到某个buf前面的buf
 
   struct buf buf[NBUF]; // 最终的缓存
 
@@ -47,9 +46,7 @@ binit(void)
     bcache.bhash_head[i].next = 0;
   }
 
-  initlock(&bcache.evict_lk, "bcache eviction lock");
-
-  for(int i = 0; i < NBUF; i++){
+  for(int i = 0; i < NBUF; i++){ // 最开始把所有缓存都分配到桶 0 上
     struct buf *b = &bcache.buf[i];
     initsleeplock(&b->lock, "buf sleep lock");
     b->lst_use = 0;
@@ -65,7 +62,7 @@ struct buf* bfind_prelru(int* lru_bkt){ // 返回 lru 前面的一个，并且�
   struct buf* b;
   for(int i = 0; i < BUCK_SIZ; i++){
     acquire(&bcache.bhash_lk[i]);
-    int found_new = 0; // 在这个桶里找到了新的，我们要一直拿着 lru 桶的锁
+    int found_new = 0;
     for(b = &bcache.bhash_head[i]; b->next; b = b->next){ 
       if(b->next->refcnt == 0 && (!lru_res || b->next->lst_use < lru_res->next->lst_use)){
         lru_res = b;
@@ -73,10 +70,11 @@ struct buf* bfind_prelru(int* lru_bkt){ // 返回 lru 前面的一个，并且�
       }
     }
     if(!found_new){
+      // 没有更好的选择，就一直持有这个锁（需要确保一直持有最佳选择对应桶的锁）
       release(&bcache.bhash_lk[i]);
-    }else{ // 有更好的选择
-      if(*lru_bkt != -1) release(&bcache.bhash_lk[*lru_bkt]);
-      *lru_bkt = i;
+    }else{ // 有更好的选择（有更久没使用的）
+      if(*lru_bkt != -1) release(&bcache.bhash_lk[*lru_bkt]); // 直接释放以前选择的锁
+      *lru_bkt = i; // 更新最佳选择
     }
   }
   return lru_res;
@@ -93,22 +91,10 @@ bget(uint dev, uint blockno)
   acquire(&bcache.bhash_lk[key]);
 
   // Is the block already cached?
-  for(b = bcache.head.next; b != &bcache.head; b = b->next){
-    if(b->dev == dev && b->blockno == blockno){
-      b->refcnt++;
-      release(&bcache.bhash_lk[key]);
-      acquiresleep(&b->lock);
-      return b;
-    }
-  }
-  release(&bcache.bhash_lk[key]);
-  acquire(&bcache.evict_lk);
-  acquire(&bcache.bhash_lk[key]);
   for(b = bcache.bhash_head[key].next; b; b = b->next){
     if(b->dev == dev && b->blockno == blockno){
       b->refcnt++;
       release(&bcache.bhash_lk[key]);
-      release(&bcache.evict_lk);  
       acquiresleep(&b->lock);
       return b;
     }
@@ -116,29 +102,37 @@ bget(uint dev, uint blockno)
   release(&bcache.bhash_lk[key]);
   int lru_bkt;
   struct buf* pre_lru = bfind_prelru(&lru_bkt);
+  // pre_lru 会返回空闲缓存前一个（链表中前一个）缓存的地址
+  // 并且确保拿到了缓存对应的桶锁
+  // 我们会传进去一个 lru_bkt，函数执行好后，这个值会储存缓存对应的桶
   if(pre_lru == 0){
     panic("bget: no buffers");
   }
-  
-  // 从另一个桶里偷缓存
-  struct buf* lru = pre_lru->next;
-  pre_lru->next = lru->next; // 用不到 pre
+  struct buf* lru = pre_lru->next; 
+  // lru （lru 是最久没有使用的缓存，并且 refcnt = 0）是 pre_lru 后面的一个
+  pre_lru->next = lru->next; 
+  // 让 pre_lru 的后面一个直接变成 lru 的后面一个，相当于删除 lru
   release(&bcache.bhash_lk[lru_bkt]);
-  
-  acquire(&bcache.bhash_lk[key]);
-  lru->next = bcache.bhash_head[key].next;
+  acquire(&bcache.bhash_lk[key]);  
+  for(b = bcache.bhash_head[key].next; b; b = b->next){
+    // 拿到锁之后要确保没有重复添加缓存
+    if(b->dev == dev && b->blockno == blockno){
+      b->refcnt++;
+      release(&bcache.bhash_lk[key]);
+      acquiresleep(&b->lock);
+      return b;
+    }
+  }
+  lru->next = bcache.bhash_head[key].next; // 把找到的缓存添加到链表头部
   bcache.bhash_head[key].next = lru;
-  
+
   lru->dev = dev, lru->blockno = blockno;
   lru->valid = 0, lru->refcnt = 1; 
 
   release(&bcache.bhash_lk[key]);
-  release(&bcache.evict_lk);  
 
   acquiresleep(&lru->lock);
   return lru;
-  // Not cached.
-  // Recycle the least recently used (LRU) unused buffer.
 }
 
 // Return a locked buf with the contents of the indicated block.
@@ -175,7 +169,7 @@ brelse(struct buf *b)
   releasesleep(&b->lock);
 
   uint key = BCACHE_HASH(b->dev, b->blockno);
-
+  // 改成散列表后要先得到 key
   acquire(&bcache.bhash_lk[key]);
   b->refcnt--;
   if (b->refcnt == 0) {
