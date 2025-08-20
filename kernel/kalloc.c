@@ -83,7 +83,7 @@ int steal(uint cpu){
     acquire(&kmems[i].lock);
 
     while(kmems[i].freelist && st_left){  
-      kmems[cpu].st_ret[idx++] = kmems[i].freelist;
+      kmems[cpu].st_ret[idx++] = (uint64)kmems[i].freelist;
       kmems[i].freelist = kmems[i].freelist->next;  // 顺序不能换 
       st_left--;
     }
@@ -123,7 +123,7 @@ kalloc(void)
     for(int i = 0; i < ret; i++){
       if (!kmems[cpu].st_ret[i]) break;
       ((struct run*)kmems[cpu].st_ret[i])->next = kmems[cpu].freelist; // 把偷来的页加到 freelist 的前面
-      kmems[cpu].freelist = kmems[cpu].st_ret[i];
+      kmems[cpu].freelist = (struct run *)kmems[cpu].st_ret[i];
     }
     r = kmems[cpu].freelist;
     kmems[cpu].freelist = r->next;
