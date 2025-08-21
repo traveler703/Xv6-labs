@@ -321,7 +321,7 @@ sys_open(void)
     struct inode* next_file;
     while(rec_left && ip->type == T_SYMLINK){
       
-      if(readi(ip, 0, path, 0, MAXPATH) == 0){
+      if(readi(ip, 0, (uint64)path, 0, MAXPATH) == 0){
         iunlockput(ip);
         end_op();
         return -1;
