@@ -463,7 +463,7 @@ itrunc(struct inode *ip)
     for (i = 0; i < NINDIRECT; i++){
       if(a[i]){
         struct buf* bp2 = bread(ip->dev, a[i]); // 获取这个块的对应缓存
-        uint *a2 = bp2->data;
+        uint *a2 = (uint *)bp2->data;
         for(j = 0; j < NINDIRECT; j++){
           if(a2[j])
             bfree(ip->dev, a2[j]);
