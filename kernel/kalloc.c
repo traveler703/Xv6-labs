@@ -1,3 +1,4 @@
+
 // Physical memory allocator, for user processes,
 // kernel stacks, page-table pages,
 // and pipe buffers. Allocates whole 4096-byte pages.
@@ -18,27 +19,22 @@ struct run {
   struct run *next;
 };
 
-#define STEAL_CNT 64
-
 struct {
-  struct spinlock lock, stlk;
+  struct spinlock lock;
   struct run *freelist;
-  uint64 st_ret[STEAL_CNT];
-} kmems[NCPU];
-
-const uint name_sz = sizeof("kmem cpu 0");
-char kmem_lk_n[NCPU][sizeof("kmem cpu 0")];
+} kmem[NCPU];
 
 void
 kinit()
 {
-  for(int i = 0; i < NCPU; i++){
-    snprintf(kmem_lk_n[i], name_sz, "kmem cpu %d", i);
-    initlock(&kmems[i].lock, kmem_lk_n[i]);
+  char buf[10];
+  for (int i = 0; i < NCPU; i++)
+  {
+    snprintf(buf, 10, "kmem_CPU%d", i);
+    initlock(&kmem[i].lock, buf);
   }
   freerange(end, (void*)PHYSTOP);
 }
-
 void
 freerange(void *pa_start, void *pa_end)
 {
@@ -60,40 +56,18 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
-  push_off();
-  uint cpu = cpuid();
-  pop_off();
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
   r = (struct run*)pa;
-  acquire(&kmems[cpu].lock);
-  r->next = kmems[cpu].freelist;
-  kmems[cpu].freelist = r;
-  release(&kmems[cpu].lock);
-}
 
-int steal(uint cpu){
-  uint st_left = STEAL_CNT;
-  int idx = 0; 
-
-  memset(kmems[cpu].st_ret, 0, sizeof(kmems[cpu].st_ret));
-  for(int i = 0; i < NCPU; i++){
-    if(i == cpu)  continue;
-    acquire(&kmems[i].lock);
-
-    while(kmems[i].freelist && st_left){  
-      kmems[cpu].st_ret[idx++] = (uint64)kmems[i].freelist;
-      kmems[i].freelist = kmems[i].freelist->next;  // 顺序不能换 
-      st_left--;
-    }
-
-    release(&kmems[i].lock);
-    if(st_left == 0) {  // 一共偷 STEAL_CNT 个
-      break;
-    }
-  }
-  return idx;  // 返回偷到了几个
+  push_off();
+  int cpu = cpuid();
+  pop_off();
+  acquire(&kmem[cpu].lock);
+  r->next = kmem[cpu].freelist;
+  kmem[cpu].freelist = r;
+  release(&kmem[cpu].lock);
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -102,36 +76,49 @@ int steal(uint cpu){
 void *
 kalloc(void)
 {
-  struct run *r = 0;
+  struct run *r;
+
   push_off();
-  uint cpu = cpuid();   
-  acquire(&kmems[cpu].lock);
-  r = kmems[cpu].freelist;  // r是之后要返回的页帧
-  if(r){ 
-    kmems[cpu].freelist = r->next;
-    release(&kmems[cpu].lock);
-  }
-  else {
-    release(&kmems[cpu].lock);
-    int ret = steal(cpu); // steal 过程中不可能 kfree，因为关闭中断
-    // ret 是偷到了多少页
-    if(ret <= 0){
-      pop_off();
-      return 0;
-    }
-    acquire(&kmems[cpu].lock);
-    for(int i = 0; i < ret; i++){
-      if (!kmems[cpu].st_ret[i]) break;
-      ((struct run*)kmems[cpu].st_ret[i])->next = kmems[cpu].freelist; // 把偷来的页加到 freelist 的前面
-      kmems[cpu].freelist = (struct run *)kmems[cpu].st_ret[i];
-    }
-    r = kmems[cpu].freelist;
-    kmems[cpu].freelist = r->next;
-    release(&kmems[cpu].lock);
-  }
-  if(r){
-    memset((char*)r, 5, PGSIZE); // fill with junk
-  }
+  int cpu = cpuid();
   pop_off();
-  return r;
+
+  acquire(&kmem[cpu].lock);
+  r = kmem[cpu].freelist;
+  if(r)
+    kmem[cpu].freelist = r->next;
+  else // steal page from other CPU
+  {
+    struct run* tmp;
+    for (int i = 0; i < NCPU; ++i)
+    {
+      if (i == cpu) continue;
+      acquire(&kmem[i].lock);
+      tmp = kmem[i].freelist;
+      if (tmp == 0) {
+        release(&kmem[i].lock);
+        continue;
+      } else {
+        for (int j = 0; j < 1024; j++) {
+          // steal 1024 pages
+          if (tmp->next)
+            tmp = tmp->next;
+          else
+            break;
+        }
+        kmem[cpu].freelist = kmem[i].freelist;
+        kmem[i].freelist = tmp->next;
+        tmp->next = 0;
+        release(&kmem[i].lock);
+        break;
+      }
+    }
+    r = kmem[cpu].freelist;
+    if (r)
+      kmem[cpu].freelist = r->next;
+  }
+  release(&kmem[cpu].lock);
+
+  if(r)
+    memset((char*)r, 5, PGSIZE); // fill with junk
+  return (void*)r;
 }
